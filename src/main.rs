@@ -1,6 +1,5 @@
 use eframe::egui;
 use pdfium_render::prelude::*;
-use rfd::FileDialog;
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
@@ -48,15 +47,21 @@ impl PdfApp {
         let Some(path) = &self.current_path else { return };
         if let Ok(document) = self.pdfium.load_pdf_from_file(path, None) {
             let mut new_textures = Vec::new();
+            
+            // If we are on page 0, only show 1 page (the cover). 
+            // Otherwise, show 2 pages (the spread).
             let pages_to_show = if self.current_page == 0 { 1 } else { 2 };
 
             for offset in 0..pages_to_show {
                 let page_idx = self.current_page + offset;
+                if page_idx >= self.max_pages { break; }
+
                 if let Ok(page) = document.pages().get(page_idx as u16) {
                     let render_config = PdfRenderConfig::new().set_target_height(1200);
                     if let Ok(bitmap) = page.render_with_config(&render_config) {
                         let mut pixels = bitmap.as_raw_bytes().to_vec();
                         for chunk in pixels.chunks_exact_mut(4) { chunk.swap(0, 2); }
+                        
                         let color_image = egui::ColorImage::from_rgba_unmultiplied(
                             [bitmap.width() as usize, bitmap.height() as usize],
                             &pixels,
@@ -74,16 +79,18 @@ impl PdfApp {
     fn render_spread(
         &self, 
         ui: &mut egui::Ui, 
-        textures: &[egui::TextureHandle], 
-        old_textures: &[egui::TextureHandle],
+        textures: &[egui::TextureHandle],      // The pages we are iterating through
+        other_textures: &[egui::TextureHandle], // Used for looking up the "back" texture
         height: f32, 
         total_width: f32, 
         x_shift: f32,
         progress: f32, 
-        is_old: bool
+        is_old: bool,
+        is_foreground: bool, // Controls the layering logic
     ) {
         if textures.is_empty() { return; }
         
+        // 1. Center the spread
         let mut content_width = 0.0;
         for tex in textures {
             content_width += height * (tex.size_vec2().x / tex.size_vec2().y);
@@ -93,42 +100,60 @@ impl PdfApp {
         let rect = ui.max_rect();
 
         for (i, texture) in textures.iter().enumerate() {
-            let aspect = texture.size_vec2().x / texture.size_vec2().y;
-            let page_width = height * aspect;
+            let page_width = height * (texture.size_vec2().x / texture.size_vec2().y);
             let start_x = x_offset + (i as f32 * page_width) + x_shift;
             
+            // 2. Identify the active curling page
+            // Right Flip: The Right page (index 1) of the Old spread curls.
+            // Left Flip: The Left page (index 0) of the New spread curls.
             let should_curl = (is_old && self.direction > 0.0 && i == 1) || 
-                            (!is_old && self.direction < 0.0 && i == 0);
+                              (is_old && self.direction < 0.0 && i == 0);
 
-            if should_curl {
-                // SAFE BOUNDS CHECKING
+            if should_curl && is_foreground {
+                // --- FOREGROUND LAYER: The Animation ---
                 let back_texture = if self.direction > 0.0 {
-                    // Forward: Back of old page 1 is new page 0
-                    if !textures.is_empty() { &textures[0] } else { texture }
+                    // Flipping Forward: Back of old page is the new page 0
+                    if !other_textures.is_empty() { &other_textures[0] } else { texture }
                 } else {
-                    // Backward: Back of new page 0 is old page 1
-                    // This is where your panic was: old_textures[1]
-                    if old_textures.len() > 1 { &old_textures[1] } else { texture }
+                    // Flipping Backward: Back of new page is the old page 1
+                    if other_textures.len() > 1 { &other_textures[1] } else { texture }
                 };
 
-                let anchor_x = if self.direction < 0.0 { 
-                    start_x + page_width 
-                } else { 
-                    start_x 
-                };
+                // Anchor is the Spine: Right edge for left page (0), Left edge for right page (1)
+                let anchor_x = if i == 0 { start_x + page_width } else { start_x };
+                
                 self.draw_curled_page(painter, texture, back_texture, anchor_x, height, page_width, progress, rect);
-            } else {
+
+            } else if !is_foreground {
+                // --- BACKGROUND LAYER: Static Pages ---
+                // If we aren't in foreground mode, we draw EVERY page as a flat image.
+                // This provides the "table" that the moving page curls over.
                 let page_rect = egui::Rect::from_min_size(
                     egui::pos2(start_x, rect.min.y), 
                     egui::vec2(page_width, height)
                 );
-                painter.image(texture.id(), page_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                painter.image(
+                    texture.id(), 
+                    page_rect, 
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), 
+                    egui::Color32::WHITE
+                );
             }
         }
     }
 
     // NEW FUNCTION GOES HERE
-    fn draw_curled_page(&self, painter: &egui::Painter, front_tex: &egui::TextureHandle, back_tex: &egui::TextureHandle, x: f32, h: f32, w: f32, p: f32, rect: egui::Rect) {
+    fn draw_curled_page(
+        &self, 
+        painter: &egui::Painter, 
+        front_tex: &egui::TextureHandle, 
+        back_tex: &egui::TextureHandle, 
+        x: f32, // The anchor_x (the spine)
+        h: f32, 
+        w: f32, 
+        p: f32, 
+        rect: egui::Rect
+    ) {
         let strips = 50;
         let y_min = rect.min.y;
 
@@ -136,9 +161,9 @@ impl PdfApp {
             let s_f = s as f32 / strips as f32;
             let next_s_f = (s + 1) as f32 / strips as f32;
 
-            // PROGRESS LOGIC:
-            // Forward: Angle goes 0 -> PI.
-            // Backward: Angle goes PI -> 0.
+            // Angle Logic:
+            // Forward (Right Page): 0 -> PI. Starts at 0 (Right), ends at PI (Left).
+            // Backward (Left Page): PI -> 0. Starts at PI (Left), ends at 0 (Right).
             let angle = if self.direction > 0.0 {
                 p * std::f32::consts::PI
             } else {
@@ -148,32 +173,42 @@ impl PdfApp {
             let cos_angle = angle.cos();
             let sin_angle = angle.sin();
 
-            // If flipping Right Page: Move POSITIVE x (multiplier 1.0)
-            // If flipping Left Page: Move NEGATIVE x (multiplier -1.0)
-            let multiplier = if self.direction < 0.0 { -1.0 } else { 1.0 };
-
-            let x_pos = x + (s_f * w * cos_angle * multiplier);
-            let next_x_pos = x + (next_s_f * w * cos_angle * multiplier);
-            let bend = (s_f * std::f32::consts::PI).sin() * sin_angle * 100.0;
-
-            // Texture Swap: When angle is between 90 and 180, we see the back
-            let is_back_side = angle.abs() > std::f32::consts::FRAC_PI_2;
+            // Texture Swap:
+            // If angle > 90 deg (cos < 0), we are looking at the back of the page.
+            let is_back_side = cos_angle < 0.0;
             let current_tex_id = if is_back_side { back_tex.id() } else { front_tex.id() };
             
             let mut mesh = egui::Mesh::with_texture(current_tex_id);
+
+            // GEOMETRY FIX:
+            // We no longer need a 'multiplier'. 
+            // If angle is PI (Left Flip start), cos(angle) is -1.0.
+            // x + (s_f * w * -1.0) correctly puts the page on the LEFT of the spine.
+            let x_pos = x + (s_f * w * cos_angle);
+            let next_x_pos = x + (next_s_f * w * cos_angle);
             
+            // Vertical lift
+            let bend = (s_f * std::f32::consts::PI).sin() * sin_angle * 80.0;
+
             // UV Mirroring
-            let (uv_start, uv_end) = if is_back_side { (1.0 - s_f, 1.0 - next_s_f) } else { (s_f, next_s_f) };
-            let shade = (255.0 - (sin_angle * 60.0)) as u8;
+            let (uv_start, uv_end) = if is_back_side {
+                (1.0 - s_f, 1.0 - next_s_f)
+            } else {
+                (s_f, next_s_f)
+            };
+
+            let shade = (255.0 - (sin_angle * 50.0)) as u8;
+            let color = egui::Color32::from_rgb(shade, shade, shade);
 
             let idx = mesh.vertices.len() as u32;
-            mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(x_pos, y_min - bend), uv: egui::pos2(uv_start, 0.0), color: egui::Color32::from_rgb(shade, shade, shade) });
-            mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(next_x_pos, y_min - bend), uv: egui::pos2(uv_end, 0.0), color: egui::Color32::from_rgb(shade, shade, shade) });
-            mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(next_x_pos, y_min + h - bend), uv: egui::pos2(uv_end, 1.0), color: egui::Color32::from_rgb(shade, shade, shade) });
-            mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(x_pos, y_min + h - bend), uv: egui::pos2(uv_start, 1.0), color: egui::Color32::from_rgb(shade, shade, shade) });
+            mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(x_pos, y_min - bend), uv: egui::pos2(uv_start, 0.0), color });
+            mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(next_x_pos, y_min - bend), uv: egui::pos2(uv_end, 0.0), color });
+            mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(next_x_pos, y_min + h - bend), uv: egui::pos2(uv_end, 1.0), color });
+            mesh.vertices.push(egui::epaint::Vertex { pos: egui::pos2(x_pos, y_min + h - bend), uv: egui::pos2(uv_start, 1.0), color });
 
             mesh.add_triangle(idx, idx + 1, idx + 2);
             mesh.add_triangle(idx, idx + 2, idx + 3);
+            
             painter.add(mesh);
         }
     }
@@ -184,22 +219,50 @@ impl eframe::App for PdfApp {
         let mut re_render_requested = false;
         let mut new_direction = 0.0;
 
+        let mut trigger_animation = false;
+        let mut new_dir = 0.0; // This fixes the E0425 error
+        let mut direction = 0.0;
         // 1. INPUT HANDLING
         if !self.is_animating {
             ctx.input_mut(|i| {
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) {
                     if self.current_page + 1 < self.max_pages {
-                        new_direction = 1.0;
-                        re_render_requested = true;
+                        new_dir = 1.0;
+                        trigger_animation = true;
                     }
-                }
-                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) {
+                } else if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) {
                     if self.current_page > 0 {
-                        new_direction = -1.0;
-                        re_render_requested = true;
+                        new_dir = -1.0;
+                        trigger_animation = true;
                     }
                 }
             });
+        }
+
+        if trigger_animation {
+            self.old_textures = self.textures.clone();
+            self.direction = new_dir;
+            
+            // PAGINATION: Centered Cover (0) -> Spread (1,2) -> Spread (3,4)
+            if new_dir > 0.0 {
+                // Forward: 0 to 1, then increment by 2
+                if self.current_page == 0 {
+                    self.current_page = 1;
+                } else {
+                    self.current_page = (self.current_page + 2).min(self.max_pages.saturating_sub(1));
+                }
+            } else {
+                // Backward: decrement by 2, but 1 goes to 0
+                if self.current_page == 1 {
+                    self.current_page = 0;
+                } else {
+                    self.current_page = self.current_page.saturating_sub(2);
+                }
+            }
+
+            self.render_current_spread(ctx); 
+            self.transition_start_time = ctx.input(|i| i.time);
+            self.is_animating = true;
         }
 
         // 2. ANIMATION TRIGGER
@@ -258,44 +321,70 @@ impl eframe::App for PdfApp {
 
         // 4. CENTRAL PANEL
         egui::CentralPanel::default().show(ctx, |ui| {
-                    if self.textures.is_empty() {
-                        ui.centered_and_justified(|ui| {
-                            ui.label("No PDF loaded.");
-                        });
-                    } else {
-                        let available_height = ui.available_height();
-                        let available_width = ui.available_width();
-                        let animation_duration = 0.7;
-                        let time_since_start = ctx.input(|i| i.time) - self.transition_start_time;
-                        let progress = (time_since_start / animation_duration).min(1.0) as f32;
-                        
-                        // Cubic Out Easing
-                        let t = 1.0 - progress;
-                        let ease_progress = 1.0 - (t * t * t);
-
-                       if self.is_animating && progress < 1.0 {
-                            ctx.request_repaint();
-                            let ease_progress = 1.0 - (1.0 - progress).powi(3);
-
-                            if self.direction > 0.0 {
-                                // Right Flip: New spread (static underneath), Old page (curling on top)
-                                self.render_spread(ui, &self.textures, &self.old_textures, available_height, available_width, 0.0, 0.0, false);
-                                self.render_spread(ui, &self.textures, &self.old_textures, available_height, available_width, 0.0, ease_progress, true);
-                            } else {
-                                // Left Flip: Old spread (static underneath), New page (curling on top)
-                                self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, 0.0, true);
-                                self.render_spread(ui, &self.textures, &self.old_textures, available_height, available_width, 0.0, ease_progress, false);
-                            }
-                        } else {
-                            // ANIMATION FINISHED: Clear the 'old' state and draw the new spread flat
-                            self.is_animating = false;
-                            self.old_textures.clear(); // Safety: free up memory on your Optiplex
-                            
-                            // Draw the current textures (both pages) as a standard flat spread
-                            // Ensure x_shift and progress are 0.0, and is_old is false
-                            self.render_spread(ui, &self.textures, &self.textures, available_height, available_width, 0.0, 0.0, false);
-                        }
-                    }
+            if self.textures.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.label("No PDF loaded.");
                 });
+            } else {
+                let available_height = ui.available_height();
+                let available_width = ui.available_width();
+                
+                let animation_duration = 0.6; 
+                let time_since_start = ctx.input(|i| i.time) - self.transition_start_time;
+                let progress = (time_since_start / animation_duration).min(1.0) as f32;
+                
+                // Cubic Out Easing
+                let t = 1.0 - progress;
+                let ease_progress = 1.0 - (t * t * t);
+
+                if self.is_animating && progress < 1.0 {
+                    ctx.request_repaint();
+
+                    if self.direction > 0.0 {
+                        // --- RIGHT FLIP (Forward: e.g., 1-2 -> 3-4) ---
+                        
+                        // 1. COMPOSITE BACKGROUND (The "Table")
+                        // Left: Page 1 (Old) | Right: Page 4 (New)
+                        if self.old_textures.len() > 0 && self.textures.len() > 1 {
+                            let background_spread = [
+                                self.old_textures[0].clone(), 
+                                self.textures[1].clone()
+                            ];
+                            // Draw flat background
+                            self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                        }
+
+                        // 2. TOP LAYER (The Moving Page)
+                        // This curls Page 2 from the old spread.
+                        self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
+
+                    } else {
+                        // --- LEFT FLIP (Backward: e.g., 3-4 -> 1-2) ---
+                        
+                        // 1. COMPOSITE BACKGROUND (The "Table")
+                        // Left: Page 1 (New) | Right: Page 4 (Old)
+                        if self.textures.len() > 0 && self.old_textures.len() > 1 {
+                            let background_spread = [
+                                self.textures[0].clone(), 
+                                self.old_textures[1].clone()
+                            ];
+                            // Draw flat background
+                            self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, true, false);
+                        }
+
+                        // 2. TOP LAYER (The Moving Page)
+                        // This curls Page 3 from the old spread.
+                        self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
+                    }
+                } else {
+                    // --- STATIC STATE (Animation Finished or Idle) ---
+                    self.is_animating = false;
+                    if !self.old_textures.is_empty() {
+                        self.old_textures.clear();
+                    }
+                    self.render_spread(ui, &self.textures, &self.textures, available_height, available_width, 0.0, 0.0, false, false);
+                }
+            }
+        });
     } // Closing update
 }
