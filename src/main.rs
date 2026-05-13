@@ -79,65 +79,81 @@ impl PdfApp {
     fn render_spread(
         &self, 
         ui: &mut egui::Ui, 
-        textures: &[egui::TextureHandle],      // The pages we are iterating through
-        other_textures: &[egui::TextureHandle], // Used for looking up the "back" texture
+        textures: &[egui::TextureHandle], 
+        other_textures: &[egui::TextureHandle],
         height: f32, 
         total_width: f32, 
         x_shift: f32,
         progress: f32, 
         is_old: bool,
-        is_foreground: bool, // Controls the layering logic
+        is_foreground: bool,
     ) {
         if textures.is_empty() { return; }
         
-        // 1. Center the spread
-        let mut content_width = 0.0;
-        for tex in textures {
-            content_width += height * (tex.size_vec2().x / tex.size_vec2().y);
-        }
+        let is_single_page = textures.len() == 1;
+        
+        // 1. Calculate Content Width
+        // If it's a cover, we act as if there's an invisible page on the left.
+        // This forces the "spine" (the hinge) to stay at the center of the screen.
+        let content_width = if is_single_page {
+            (height * (textures[0].size_vec2().x / textures[0].size_vec2().y)) * 2.0
+        } else {
+            let mut w = 0.0;
+            for tex in textures {
+                w += height * (tex.size_vec2().x / tex.size_vec2().y);
+            }
+            w
+        };
+
         let x_offset = (total_width - content_width) / 2.0;
         let painter = ui.painter();
         let rect = ui.max_rect();
 
         for (i, texture) in textures.iter().enumerate() {
-            let page_width = height * (texture.size_vec2().x / texture.size_vec2().y);
-            let start_x = x_offset + (i as f32 * page_width) + x_shift;
+            let aspect = texture.size_vec2().x / texture.size_vec2().y;
+            let page_width = height * aspect;
             
-            // 2. Identify the active curling page
-            // Right Flip: The Right page (index 1) of the Old spread curls.
-            // Left Flip: The Left page (index 0) of the New spread curls.
-            let should_curl = (is_old && self.direction > 0.0 && i == 1) || 
-                              (is_old && self.direction < 0.0 && i == 0);
+            // 2. Position the page
+            // If it's a single page (cover), we shift it to the right slot (index 1).
+            let start_x = if is_single_page {
+                x_offset + page_width + x_shift
+            } else {
+                x_offset + (i as f32 * page_width) + x_shift
+            };
+            
+            // 3. Determine if this specific page should curl
+            // We curl if it's the right-hand page (index 1) of any spread, 
+            // OR if it's the single-page cover being opened.
+            let is_right_page = i == 1 || is_single_page;
+            let should_curl = (is_old && self.direction > 0.0 && is_right_page) || 
+                            (is_old && self.direction < 0.0 && i == 0);
 
             if should_curl && is_foreground {
-                // --- FOREGROUND LAYER: The Animation ---
                 let back_texture = if self.direction > 0.0 {
-                    // Flipping Forward: Back of old page is the new page 0
+                    // Opening: Show the back of the page (destination)
                     if !other_textures.is_empty() { &other_textures[0] } else { texture }
                 } else {
-                    // Flipping Backward: Back of new page is the old page 1
-                    if other_textures.len() > 1 { &other_textures[1] } else { texture }
+                    // Closing: Show the back of the page (destination cover)
+                    if !other_textures.is_empty() { &other_textures[0] } else { texture }
                 };
 
-                // Anchor is the Spine: Right edge for left page (0), Left edge for right page (1)
-                let anchor_x = if i == 0 { start_x + page_width } else { start_x };
+                // 4. Set the Anchor (The Hinge)
+                // If it's a right-hand page (opening), hinge is on the LEFT (start_x).
+                // If it's a left-hand page (closing), hinge is on the RIGHT (start_x + width).
+                let anchor_x = if i == 0 && !is_single_page {
+                    start_x + page_width
+                } else {
+                    start_x
+                };
                 
                 self.draw_curled_page(painter, texture, back_texture, anchor_x, height, page_width, progress, rect);
-
             } else if !is_foreground {
-                // --- BACKGROUND LAYER: Static Pages ---
-                // If we aren't in foreground mode, we draw EVERY page as a flat image.
-                // This provides the "table" that the moving page curls over.
+                // Draw flat background page
                 let page_rect = egui::Rect::from_min_size(
                     egui::pos2(start_x, rect.min.y), 
                     egui::vec2(page_width, height)
                 );
-                painter.image(
-                    texture.id(), 
-                    page_rect, 
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), 
-                    egui::Color32::WHITE
-                );
+                painter.image(texture.id(), page_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             }
         }
     }
@@ -333,7 +349,7 @@ impl eframe::App for PdfApp {
                 let time_since_start = ctx.input(|i| i.time) - self.transition_start_time;
                 let progress = (time_since_start / animation_duration).min(1.0) as f32;
                 
-                // Cubic Out Easing
+                // Cubic Out Easing: Smooth deceleration
                 let t = 1.0 - progress;
                 let ease_progress = 1.0 - (t * t * t);
 
@@ -341,47 +357,55 @@ impl eframe::App for PdfApp {
                     ctx.request_repaint();
 
                     if self.direction > 0.0 {
-                        // --- RIGHT FLIP (Forward: e.g., 1-2 -> 3-4) ---
-                        
-                        // 1. COMPOSITE BACKGROUND (The "Table")
-                        // Left: Page 1 (Old) | Right: Page 4 (New)
-                        if self.old_textures.len() > 0 && self.textures.len() > 1 {
-                            let background_spread = [
-                                self.old_textures[0].clone(), 
-                                self.textures[1].clone()
-                            ];
-                            // Draw flat background
-                            self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                        // --- RIGHT FLIP (Forward) ---
+                        if self.old_textures.len() == 1 {
+                            // CASE: Opening the Cover (Page 0 -> Pages 1-2)
+                            // 1. Bottom Layer: The new spread is the entire background
+                            self.render_spread(ui, &self.textures, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                            // 2. Top Layer: The cover (old_textures[0]) curls to the left
+                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
+                        } else {
+                            // CASE: Standard Spread Flip (e.g., 1-2 -> 3-4)
+                            // 1. Composite Background: Left Page (Old) | Right Page (New)
+                            if self.old_textures.len() > 0 && self.textures.len() > 1 {
+                                let background_spread = [
+                                    self.old_textures[0].clone(), 
+                                    self.textures[1].clone()
+                                ];
+                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                            }
+                            // 2. Top Layer: Right page of old spread curls away
+                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
                         }
-
-                        // 2. TOP LAYER (The Moving Page)
-                        // This curls Page 2 from the old spread.
-                        self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
-
                     } else {
-                        // --- LEFT FLIP (Backward: e.g., 3-4 -> 1-2) ---
-                        
-                        // 1. COMPOSITE BACKGROUND (The "Table")
-                        // Left: Page 1 (New) | Right: Page 4 (Old)
-                        if self.textures.len() > 0 && self.old_textures.len() > 1 {
-                            let background_spread = [
-                                self.textures[0].clone(), 
-                                self.old_textures[1].clone()
-                            ];
-                            // Draw flat background
-                            self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, true, false);
+                        // --- LEFT FLIP (Backward) ---
+                        if self.textures.len() == 1 {
+                            // CASE: Closing to Cover (Pages 1-2 -> Page 0)
+                            // 1. Bottom Layer: The cover is the static background
+                            self.render_spread(ui, &self.textures, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                            // 2. Top Layer: Left page of the spread (old_textures[0]) curls to the right
+                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
+                        } else {
+                            // CASE: Standard Spread Flip (e.g., 3-4 -> 1-2)
+                            // 1. Composite Background: Left Page (New) | Right Page (Old)
+                            if self.textures.len() > 0 && self.old_textures.len() > 1 {
+                                let background_spread = [
+                                    self.textures[0].clone(), 
+                                    self.old_textures[1].clone()
+                                ];
+                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, true, false);
+                            }
+                            // 2. Top Layer: Left page of old spread curls away
+                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
                         }
-
-                        // 2. TOP LAYER (The Moving Page)
-                        // This curls Page 3 from the old spread.
-                        self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
                     }
                 } else {
-                    // --- STATIC STATE (Animation Finished or Idle) ---
+                    // --- STATIC STATE ---
                     self.is_animating = false;
                     if !self.old_textures.is_empty() {
                         self.old_textures.clear();
                     }
+                    // Centering happens automatically in render_spread
                     self.render_spread(ui, &self.textures, &self.textures, available_height, available_width, 0.0, 0.0, false, false);
                 }
             }
