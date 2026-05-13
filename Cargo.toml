@@ -8,3 +8,5 @@ eframe = "0.24" # The GUI framework
 rfd = "0.12"    # File dialog
 pdfium-render = "0.8" # PDF rendering engine
 image = "0.24"  # To handle the rendered bitmap
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser", "windef", "winbase"] }
