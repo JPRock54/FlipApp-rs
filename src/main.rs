@@ -59,8 +59,7 @@ impl PdfApp {
                 if let Ok(page) = document.pages().get(page_idx as u16) {
                     let render_config = PdfRenderConfig::new().set_target_height(1200);
                     if let Ok(bitmap) = page.render_with_config(&render_config) {
-                        let mut pixels = bitmap.as_raw_bytes().to_vec();
-                        // for chunk in pixels.chunks_exact_mut(4) { chunk.swap(0, 2); }
+                        let pixels = bitmap.as_raw_bytes().to_vec();
                         
                         let color_image = egui::ColorImage::from_rgba_unmultiplied(
                             [bitmap.width() as usize, bitmap.height() as usize],
@@ -130,11 +129,17 @@ impl PdfApp {
 
             if should_curl && is_foreground {
                 let back_texture = if self.direction > 0.0 {
-                    // Opening: Show the back of the page (destination)
+                    // FORWARD FLIP: The back of the curling right page is the NEW LEFT page (index 0)
                     if !other_textures.is_empty() { &other_textures[0] } else { texture }
                 } else {
-                    // Closing: Show the back of the page (destination cover)
-                    if !other_textures.is_empty() { &other_textures[0] } else { texture }
+                    // BACKWARD FLIP: The back of the curling left page is the NEW RIGHT page (index 1)
+                    if other_textures.len() > 1 { 
+                        &other_textures[1] // Use the new right page for the back of the curl
+                    } else if !other_textures.is_empty() { 
+                        &other_textures[0] // Fallback if we are closing to a single-page cover
+                    } else { 
+                        texture 
+                    }
                 };
 
                 // 4. Set the Anchor (The Hinge)
@@ -181,37 +186,49 @@ impl PdfApp {
             // Forward (Right Page): 0 -> PI. Starts at 0 (Right), ends at PI (Left).
             // Backward (Left Page): PI -> 0. Starts at PI (Left), ends at 0 (Right).
             let angle = if self.direction > 0.0 {
-                p * std::f32::consts::PI
-            } else {
-                (1.0 - p) * std::f32::consts::PI
-            };
+                    p * std::f32::consts::PI
+                } else {
+                    (1.0 - p) * std::f32::consts::PI
+                };
 
-            let cos_angle = angle.cos();
-            let sin_angle = angle.sin();
+                let cos_angle = angle.cos();
+                let sin_angle = angle.sin();
 
-            // Texture Swap:
-            // If angle > 90 deg (cos < 0), we are looking at the back of the page.
-            let is_back_side = cos_angle < 0.0;
-            let current_tex_id = if is_back_side { back_tex.id() } else { front_tex.id() };
-            
-            let mut mesh = egui::Mesh::with_texture(current_tex_id);
+                // 1. DYNAMIC BACK SIDE DETECTION
+                // Right-to-Left flip (direction > 0): Left side of spine (cos < 0) is the back.
+                // Left-to-Right flip (direction < 0): Right side of spine (cos > 0) is the back.
+                let is_back_side = if self.direction > 0.0 {
+                    cos_angle < 0.0
+                } else {
+                    cos_angle > 0.0
+                };
+                
+                let current_tex_id = if is_back_side { back_tex.id() } else { front_tex.id() };
+                
+                let mut mesh = egui::Mesh::with_texture(current_tex_id);
 
-            // GEOMETRY FIX:
-            // We no longer need a 'multiplier'. 
-            // If angle is PI (Left Flip start), cos(angle) is -1.0.
-            // x + (s_f * w * -1.0) correctly puts the page on the LEFT of the spine.
-            let x_pos = x + (s_f * w * cos_angle);
-            let next_x_pos = x + (next_s_f * w * cos_angle);
-            
-            // Vertical lift
-            let bend = (s_f * std::f32::consts::PI).sin() * sin_angle * 80.0;
+                let x_pos = x + (s_f * w * cos_angle);
+                let next_x_pos = x + (next_s_f * w * cos_angle);
+                
+                let bend = (s_f * std::f32::consts::PI).sin() * sin_angle * 80.0;
 
-            // UV Mirroring
-            let (uv_start, uv_end) = if is_back_side {
-                (1.0 - s_f, 1.0 - next_s_f)
-            } else {
-                (s_f, next_s_f)
-            };
+                // 2. DYNAMIC UV MAPPING
+                // s_f = 0.0 is ALWAYS the hinge (spine). 
+                // Right pages (and the back of left pages) have their spine at the left edge of the image (UV 0.0)
+                // Left pages (and the back of right pages) have their spine at the right edge of the image (UV 1.0)
+                let (uv_start, uv_end) = if self.direction > 0.0 {
+                    if is_back_side {
+                        (1.0 - s_f, 1.0 - next_s_f) 
+                    } else {
+                        (s_f, next_s_f) 
+                    }
+                } else {
+                    if is_back_side {
+                        (s_f, next_s_f) 
+                    } else {
+                        (1.0 - s_f, 1.0 - next_s_f) 
+                    }
+                };
 
             let shade = (255.0 - (sin_angle * 50.0)) as u8;
             let color = egui::Color32::from_rgb(shade, shade, shade);
