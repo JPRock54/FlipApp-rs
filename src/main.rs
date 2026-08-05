@@ -60,7 +60,7 @@ impl PdfApp {
                     let render_config = PdfRenderConfig::new().set_target_height(1200);
                     if let Ok(bitmap) = page.render_with_config(&render_config) {
                         let mut pixels = bitmap.as_raw_bytes().to_vec();
-                        for chunk in pixels.chunks_exact_mut(4) { chunk.swap(0, 2); }
+                        // for chunk in pixels.chunks_exact_mut(4) { chunk.swap(0, 2); }
                         
                         let color_image = egui::ColorImage::from_rgba_unmultiplied(
                             [bitmap.width() as usize, bitmap.height() as usize],
@@ -232,12 +232,11 @@ impl PdfApp {
 
 impl eframe::App for PdfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let mut re_render_requested = false;
-        let mut new_direction = 0.0;
+        let re_render_requested = false;
+        let new_direction = 0.0;
 
         let mut trigger_animation = false;
-        let mut new_dir = 0.0; // This fixes the E0425 error
-        let mut direction = 0.0;
+        let mut new_dir = 0.0; // This fixes the E0425 erro
         // 1. INPUT HANDLING
         if !self.is_animating {
             ctx.input_mut(|i| {
