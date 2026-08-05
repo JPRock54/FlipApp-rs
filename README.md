@@ -21,4 +21,8 @@ Before building FlipApp, ensure you have the following installed:
 1. Clone the repository and navigate into the project directory:
    ```bash
    git clone [https://github.com/JPRock54/FlipApp-rs.git](https://github.com/JPRock54/FlipApp-rs.git)
-   cd FlipApp-rs```
+   cd FlipApp-rs
+2. Ensure libpdfium.so is present in the project root.
+3. Build the release binary:
+   ```bash
+   cargo build --release
