@@ -14,13 +14,9 @@ fn main() -> eframe::Result<()> {
 struct PdfApp {
     pdfium: Arc<Pdfium>,
     textures: Vec<egui::TextureHandle>,
-    
-    // --- NEW PAGINATION STATE ---
     total_pages: usize,
-    spreads: Vec<Vec<usize>>, // e.g., [[0], [1, 2], [3], [4, 5]]
+    spreads: Vec<Vec<usize>>, 
     current_spread: usize,
-    // ----------------------------
-    
     current_path: Option<std::path::PathBuf>,
     old_textures: Vec<egui::TextureHandle>,
     transition_start_time: f64,
@@ -112,7 +108,7 @@ impl PdfApp {
         }
     }
 
-    // Helper now inside the impl block
+    // Render Helper
     fn render_spread(
         &self, 
         ui: &mut egui::Ui, 
@@ -188,7 +184,7 @@ impl PdfApp {
         }
     }
 
-    // NEW FUNCTION GOES HERE
+    // Draws the animation
     fn draw_curled_page(
         &self, 
         painter: &egui::Painter, 
@@ -275,7 +271,7 @@ impl PdfApp {
 impl eframe::App for PdfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut trigger_animation = false;
-        let mut new_dir = 0.0; // This fixes the E0425 erro
+        let mut new_dir = 0.0; 
         // 1. INPUT HANDLING
         if !self.is_animating {
             ctx.input_mut(|i| {
@@ -337,7 +333,7 @@ impl eframe::App for PdfApp {
                                 if let Ok(page_a) = doc.pages().get(i as u16) {
                                     let w1 = page_a.width().value;
                                     let h1 = page_a.height().value;
-                                    let is_a_standard = (w1 / h1) < 0.85; // A4 is ~0.707
+                                    let is_a_standard = (w1 / h1) < 0.85; 
 
                                     // If standard, check if the NEXT page is ALSO standard
                                     if is_a_standard && i + 1 < self.total_pages {
@@ -379,7 +375,7 @@ impl eframe::App for PdfApp {
             });
         });
 
-        // 4. CENTRAL PANEL
+        // CENTRAL PANEL
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.textures.is_empty() {
                 ui.centered_and_justified(|ui| {
@@ -462,5 +458,5 @@ impl eframe::App for PdfApp {
                     }
             }
         });
-    } // Closing update
-} // Closing impl eframe::App
+    } 
+} 
