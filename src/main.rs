@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use eframe::egui;
 use pdfium_render::prelude::*;
 use std::sync::Arc;

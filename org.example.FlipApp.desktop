@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=FlipApp
+Exec=flipapp
+Icon=org.example.FlipApp
+Terminal=false
+Categories=Utility;

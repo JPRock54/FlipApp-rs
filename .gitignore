@@ -1,1 +1,18 @@
-/target
+# Rust build artifacts
+/target/
+
+# Flatpak builder working directories and local repository
+/.flatpak-builder/
+/build-dir/
+/repo/
+
+# IDE / Editor files (VSCodium / VS Code)
+.vscode/
+.idea/
+
+# OS-specific temp files
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo

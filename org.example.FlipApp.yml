@@ -1,37 +1,36 @@
 app-id: org.example.FlipApp
 runtime: org.freedesktop.Platform
-runtime-version: '25.08' # Use a stable recent version
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: FlipApp
-finish-args:
-  - --socket=x11
-  - --socket=wayland
-  - --device=dri        # GPU acceleration for egui
-  - --filesystem=home   # To open PDF files
-modules:
-  - name: pdfium
-    buildsystem: simple
-    build-commands:
-      - install -D libpdfium.so /app/lib/libpdfium.so
-    sources:
-      - type: file
-        path: /usr/lib/libpdfium.so
 
-  - name: flip-app
+finish-args:
+  - --socket=wayland
+  - --socket=x11
+  - --share=ipc
+  - --filesystem=xdg-download
+  - --filesystem=xdg-documents
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+
+modules:
+  - name: flipapp
     buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/flipapp/cargo
     build-commands:
-      - cargo build --release
-      - install -D ./target/release/FlipApp /app/bin/FlipApp
+      - cargo build --offline --release
+      - install -Dm0755 target/release/FlipApp ${FLATPAK_DEST}/bin/flipapp
+      - install -Dm0644 libpdfium.so ${FLATPAK_DEST}/lib/libpdfium.so
+      - install -Dm0644 org.example.FlipApp.desktop ${FLATPAK_DEST}/share/applications/org.example.FlipApp.desktop
     sources:
       - type: dir
         path: .
-    build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin
-      build-args:
-        - --share=network  # <--- This is the magic line
-      env:
-        CARGO_HOME: /run/build/flip-app/cargo
-        # Tell your Rust code where to find PDFium inside the sandbox
-        PDFIUM_BINARY_PATH: /app/lib/libpdfium.so
+      - cargo-sources.json
+      - type: file
+        path: libpdfium.so
+      - type: file
+        path: org.example.FlipApp.desktop
