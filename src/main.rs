@@ -76,92 +76,87 @@ impl PdfApp {
 
     // Helper now inside the impl block
     fn render_spread(
-        &self, 
-        ui: &mut egui::Ui, 
-        textures: &[egui::TextureHandle], 
-        other_textures: &[egui::TextureHandle],
-        height: f32, 
-        total_width: f32, 
-        x_shift: f32,
-        progress: f32, 
-        is_old: bool,
-        is_foreground: bool,
-    ) {
-        if textures.is_empty() { return; }
-        
-        let is_single_page = textures.len() == 1;
-        
-        // 1. Calculate Content Width
-        // If it's a cover, we act as if there's an invisible page on the left.
-        // This forces the "spine" (the hinge) to stay at the center of the screen.
-        let content_width = if is_single_page {
-            (height * (textures[0].size_vec2().x / textures[0].size_vec2().y)) * 2.0
-        } else {
-            let mut w = 0.0;
-            for tex in textures {
-                w += height * (tex.size_vec2().x / tex.size_vec2().y);
-            }
-            w
-        };
-
-        let x_offset = (total_width - content_width) / 2.0;
-        let painter = ui.painter();
-        let rect = ui.max_rect();
-
-        for (i, texture) in textures.iter().enumerate() {
-            let aspect = texture.size_vec2().x / texture.size_vec2().y;
-            let page_width = height * aspect;
+            &self, 
+            ui: &mut egui::Ui, 
+            textures: &[egui::TextureHandle], 
+            other_textures: &[egui::TextureHandle],
+            height: f32, 
+            total_width: f32, 
+            x_shift: f32,
+            progress: f32, 
+            is_old: bool,
+            is_foreground: bool,
+            is_right_aligned: bool, // <--- NEW PARAMETER
+        ) {
+            if textures.is_empty() { return; }
             
-            // 2. Position the page
-            // If it's a single page (cover), we shift it to the right slot (index 1).
-            let start_x = if is_single_page {
-                x_offset + page_width + x_shift
+            let is_single_page = textures.len() == 1;
+            
+            let content_width = if is_single_page {
+                (height * (textures[0].size_vec2().x / textures[0].size_vec2().y)) * 2.0
             } else {
-                x_offset + (i as f32 * page_width) + x_shift
+                let mut w = 0.0;
+                for tex in textures {
+                    w += height * (tex.size_vec2().x / tex.size_vec2().y);
+                }
+                w
             };
-            
-            // 3. Determine if this specific page should curl
-            // We curl if it's the right-hand page (index 1) of any spread, 
-            // OR if it's the single-page cover being opened.
-            let is_right_page = i == 1 || is_single_page;
-            let should_curl = (is_old && self.direction > 0.0 && is_right_page) || 
-                            (is_old && self.direction < 0.0 && i == 0);
 
-            if should_curl && is_foreground {
-                let back_texture = if self.direction > 0.0 {
-                    // FORWARD FLIP: The back of the curling right page is the NEW LEFT page (index 0)
-                    if !other_textures.is_empty() { &other_textures[0] } else { texture }
-                } else {
-                    // BACKWARD FLIP: The back of the curling left page is the NEW RIGHT page (index 1)
-                    if other_textures.len() > 1 { 
-                        &other_textures[1] // Use the new right page for the back of the curl
-                    } else if !other_textures.is_empty() { 
-                        &other_textures[0] // Fallback if we are closing to a single-page cover
-                    } else { 
-                        texture 
-                    }
-                };
+            let x_offset = (total_width - content_width) / 2.0;
+            let painter = ui.painter();
+            let rect = ui.max_rect();
 
-                // 4. Set the Anchor (The Hinge)
-                // If it's a right-hand page (opening), hinge is on the LEFT (start_x).
-                // If it's a left-hand page (closing), hinge is on the RIGHT (start_x + width).
-                let anchor_x = if i == 0 && !is_single_page {
-                    start_x + page_width
+            for (i, texture) in textures.iter().enumerate() {
+                let aspect = texture.size_vec2().x / texture.size_vec2().y;
+                let page_width = height * aspect;
+                
+                // 2. Position the page
+                // Shift to the right slot ONLY if it's a cover/right-aligned
+                let start_x = if is_single_page && is_right_aligned {
+                    x_offset + page_width + x_shift
                 } else {
-                    start_x
+                    x_offset + (i as f32 * page_width) + x_shift
                 };
                 
-                self.draw_curled_page(painter, texture, back_texture, anchor_x, height, page_width, progress, rect);
-            } else if !is_foreground {
-                // Draw flat background page
+                // 3. Determine if this specific page should curl
+                let is_right_page = i == 1 || (is_single_page && is_right_aligned);
+                let should_curl = (is_old && self.direction > 0.0 && is_right_page) || 
+                                (is_old && self.direction < 0.0 && i == 0);
+
+                if should_curl && is_foreground {
+                    // ... (Keep your existing back_texture logic here) ...
+                    let back_texture = if self.direction > 0.0 {
+                        if !other_textures.is_empty() { &other_textures[0] } else { texture }
+                    } else {
+                        if other_textures.len() > 1 { 
+                            &other_textures[1] 
+                        } else if !other_textures.is_empty() { 
+                            &other_textures[0] 
+                        } else { 
+                            texture 
+                        }
+                    };
+
+                    // 4. Set the Anchor (The Hinge)
+                    // Left pages hinge on their right edge (start_x + width). 
+                    // Right pages hinge on their left edge (start_x).
+                    let anchor_x = if i == 0 && !(is_single_page && is_right_aligned) {
+                        start_x + page_width
+                    } else {
+                        start_x
+                    };
+                    
+                    self.draw_curled_page(painter, texture, back_texture, anchor_x, height, page_width, progress, rect);
+                } else if !is_foreground {
+                // ... (Keep your existing background draw logic here) ...
                 let page_rect = egui::Rect::from_min_size(
-                    egui::pos2(start_x, rect.min.y), 
-                    egui::vec2(page_width, height)
-                );
-                painter.image(texture.id(), page_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                        egui::pos2(start_x, rect.min.y), 
+                        egui::vec2(page_width, height)
+                    );
+                    painter.image(texture.id(), page_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                }
             }
         }
-    }
 
     // NEW FUNCTION GOES HERE
     fn draw_curled_page(
@@ -375,49 +370,50 @@ impl eframe::App for PdfApp {
                     if self.direction > 0.0 {
                         // --- RIGHT FLIP (Forward) ---
                         if self.old_textures.len() == 1 {
-                            // CASE: Opening the Cover (Page 0 -> Pages 1-2)
-                            // Fix: Only draw the NEW RIGHT page in the background. 
-                            // The new left page is attached to the back of the cover!
+                            // CASE: Opening the Cover
                             if self.textures.len() > 1 {
                                 let background_spread = [self.textures[1].clone()];
-                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                                // true = Cover acts as a Right page
+                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false, true);
                             }
-                            // Top Layer: The cover (old_textures[0]) curls to the left
-                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
+                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true, true);
                         } else {
-                            // CASE: Standard Spread Flip (e.g., 1-2 -> 3-4)
-                            if self.old_textures.len() > 0 && self.textures.len() > 1 {
-                                let background_spread = [
-                                    self.old_textures[0].clone(), 
-                                    self.textures[1].clone()
-                                ];
-                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                            // CASE: Standard Spread Flip OR End of Book
+                            if self.old_textures.len() > 0 {
+                                if self.textures.len() > 1 {
+                                    let background_spread = [self.old_textures[0].clone(), self.textures[1].clone()];
+                                    self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false, false);
+                                } else {
+                                    // FIX: We reached the final single page. Keep the old left page rendered in the background!
+                                    let background_spread = [self.old_textures[0].clone()];
+                                    // false = Final page acts as a Left page
+                                    self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false, false); 
+                                }
                             }
-                            // Top Layer: Right page of old spread curls away
-                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
+                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true, false);
                         }
                     } else {
                         // --- LEFT FLIP (Backward) ---
                         if self.textures.len() == 1 {
-                            // CASE: Closing to Cover (Pages 1-2 -> Page 0)
-                            // Fix: Only draw the OLD RIGHT page in the background until the cover lands.
+                            // CASE: Closing to Cover
                             if self.old_textures.len() > 1 {
                                 let background_spread = [self.old_textures[1].clone()];
-                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false, true);
                             }
-                            // Top Layer: Left page of the spread (old_textures[0]) curls to the right
-                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
+                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true, false);
                         } else {
-                            // CASE: Standard Spread Flip (e.g., 3-4 -> 1-2)
-                            if self.textures.len() > 0 && self.old_textures.len() > 1 {
-                                let background_spread = [
-                                    self.textures[0].clone(), 
-                                    self.old_textures[1].clone()
-                                ];
-                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, true, false);
+                            // CASE: Standard Backward Flip OR Flipping back FROM the last page
+                            if self.textures.len() > 0 {
+                                if self.old_textures.len() > 1 {
+                                    let background_spread = [self.textures[0].clone(), self.old_textures[1].clone()];
+                                    self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, true, false, false);
+                                } else {
+                                    // FIX: Flipping backward FROM a single last page. Put the new left page in the background.
+                                    let background_spread = [self.textures[0].clone()];
+                                    self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, true, false, false);
+                                }
                             }
-                            // Top Layer: Left page of old spread curls away
-                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
+                            self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true, false);
                         }
                     }
                 } else {
@@ -426,8 +422,10 @@ impl eframe::App for PdfApp {
                     if !self.old_textures.is_empty() {
                         self.old_textures.clear();
                     }
-                    // Centering happens automatically in render_spread
-                    self.render_spread(ui, &self.textures, &self.textures, available_height, available_width, 0.0, 0.0, false, false);
+                    
+                    // The only time a single page is right-aligned in static mode is if it's the front cover.
+                    let is_cover = self.current_page == 0;
+                    self.render_spread(ui, &self.textures, &self.textures, available_height, available_width, 0.0, 0.0, false, false, is_cover);
                 }
             }
         });
