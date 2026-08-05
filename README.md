@@ -22,20 +22,26 @@ Before building FlipApp, ensure you have the following installed:
    ```bash
    git clone [https://github.com/JPRock54/FlipApp-rs.git](https://github.com/JPRock54/FlipApp-rs.git)
    cd FlipApp-rs
+
 2. Ensure libpdfium.so is present in the project root.
+
 3. Build the release binary:
    ```bash
    cargo build --release
+
 4. The compiled binary will be located at target/release/FlipApp.
 
 ### Method 2: Flatpak Build (Recommended for Distribution)
 1. Install flatpak and flatpak-builder if you haven't already.
+
 2. Build and export the app to a local repository:
    ```bash
    flatpak-builder --user --force-clean --repo=repo build-dir org.example.FlipApp.yml
+
 3. Install the app locally:
    ```bash
    flatpak --user install --reinstall local-repo org.example.FlipApp
+
 4. Run the application (Also can be run from desktop entry)
    ```bash
    flatpak run org.example.FlipApp
@@ -45,7 +51,9 @@ Before building FlipApp, ensure you have the following installed:
    ```bash
    git clone [https://github.com/JPRock54/FlipApp-rs.git](https://github.com/JPRock54/FlipApp-rs.git)
    cd FlipApp-rs
+
 2. Build the release version using Cargo:
    ```bash
    cargo build --release
+   
 3. Copy pdfium.dll into the output folder (target/release/) right next to FlipApp.exe before running it.
