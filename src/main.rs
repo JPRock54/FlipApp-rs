@@ -14,10 +14,14 @@ fn main() -> eframe::Result<()> {
 struct PdfApp {
     pdfium: Arc<Pdfium>,
     textures: Vec<egui::TextureHandle>,
-    current_page: usize,
-    max_pages: usize,
+    
+    // --- NEW PAGINATION STATE ---
+    total_pages: usize,
+    spreads: Vec<Vec<usize>>, // e.g., [[0], [1, 2], [3], [4, 5]]
+    current_spread: usize,
+    // ----------------------------
+    
     current_path: Option<std::path::PathBuf>,
-    // Animation fields
     old_textures: Vec<egui::TextureHandle>,
     transition_start_time: f64,
     is_animating: bool,
@@ -33,8 +37,9 @@ impl PdfApp {
         Self {
             pdfium: Arc::new(pdfium),
             textures: Vec::new(),
-            current_page: 0,
-            max_pages: 0,
+            total_pages: 0,
+            spreads: Vec::new(),
+            current_spread: 0,
             current_path: None,
             old_textures: Vec::new(),
             transition_start_time: 0.0,
@@ -43,30 +48,63 @@ impl PdfApp {
         }
     }
 
+
     fn render_current_spread(&mut self, ctx: &egui::Context) {
         let Some(path) = &self.current_path else { return };
+        if self.spreads.is_empty() { return; }
+
         if let Ok(document) = self.pdfium.load_pdf_from_file(path, None) {
             let mut new_textures = Vec::new();
             
-            // If we are on page 0, only show 1 page (the cover). 
-            // Otherwise, show 2 pages (the spread).
-            let pages_to_show = if self.current_page == 0 { 1 } else { 2 };
+            let current_pages = &self.spreads[self.current_spread];
 
-            for offset in 0..pages_to_show {
-                let page_idx = self.current_page + offset;
-                if page_idx >= self.max_pages { break; }
-
+            for &page_idx in current_pages {
                 if let Ok(page) = document.pages().get(page_idx as u16) {
-                    let render_config = PdfRenderConfig::new().set_target_height(1200);
+                    let render_config = PdfRenderConfig::new()
+                        .set_target_height(1200)
+                        .set_format(PdfBitmapFormat::BGRA);
+
                     if let Ok(bitmap) = page.render_with_config(&render_config) {
                         let pixels = bitmap.as_raw_bytes().to_vec();
+                        let width = bitmap.width() as usize;
+                        let height = bitmap.height() as usize;
                         
-                        let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                            [bitmap.width() as usize, bitmap.height() as usize],
-                            &pixels,
-                        );
-                        let tex_name = format!("page_{}_{}", path.display(), page_idx);
-                        new_textures.push(ctx.load_texture(tex_name, color_image, Default::default()));
+                        let aspect = width as f32 / height as f32;
+
+                        // SLICING LOGIC: If it's a wide page sitting by itself, cut it in half!
+                        if aspect > 0.85 && current_pages.len() == 1 {
+                            let half_width = width / 2;
+                            let mut left_pixels = Vec::with_capacity(half_width * height * 4);
+                            let mut right_pixels = Vec::with_capacity((width - half_width) * height * 4);
+
+                            // Iterate row by row and split the bytes
+                            for row in 0..height {
+                                let row_start = row * width * 4;
+                                let row_mid = row_start + half_width * 4;
+                                let row_end = row_start + width * 4;
+
+                                left_pixels.extend_from_slice(&pixels[row_start..row_mid]);
+                                right_pixels.extend_from_slice(&pixels[row_mid..row_end]);
+                            }
+
+                            // Create two separate images
+                            let left_image = egui::ColorImage::from_rgba_unmultiplied([half_width, height], &left_pixels);
+                            let right_image = egui::ColorImage::from_rgba_unmultiplied([width - half_width, height], &right_pixels);
+
+                            let tex_name_l = format!("page_{}_{}_L", path.display(), page_idx);
+                            let tex_name_r = format!("page_{}_{}_R", path.display(), page_idx);
+
+                            new_textures.push(ctx.load_texture(tex_name_l, left_image, Default::default()));
+                            new_textures.push(ctx.load_texture(tex_name_r, right_image, Default::default()));
+                        } else {
+                            // Standard page handling
+                            let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                                [width, height],
+                                &pixels,
+                            );
+                            let tex_name = format!("page_{}_{}", path.display(), page_idx);
+                            new_textures.push(ctx.load_texture(tex_name, color_image, Default::default()));
+                        }
                     }
                 }
             }
@@ -76,87 +114,79 @@ impl PdfApp {
 
     // Helper now inside the impl block
     fn render_spread(
-            &self, 
-            ui: &mut egui::Ui, 
-            textures: &[egui::TextureHandle], 
-            other_textures: &[egui::TextureHandle],
-            height: f32, 
-            total_width: f32, 
-            x_shift: f32,
-            progress: f32, 
-            is_old: bool,
-            is_foreground: bool,
-            is_right_aligned: bool, // <--- NEW PARAMETER
-        ) {
-            if textures.is_empty() { return; }
+        &self, 
+        ui: &mut egui::Ui, 
+        textures: &[egui::TextureHandle], 
+        other_textures: &[egui::TextureHandle],
+        height: f32, 
+        total_width: f32, 
+        x_shift: f32,
+        progress: f32, 
+        is_old: bool,
+        is_foreground: bool,
+        is_right_aligned: bool, 
+    ) {
+        if textures.is_empty() { return; }
+        
+        let is_single_page = textures.len() == 1;
+        
+        let content_width = if is_single_page {
+            (height * (textures[0].size_vec2().x / textures[0].size_vec2().y)) * 2.0
+        } else {
+            let mut w = 0.0;
+            for tex in textures {
+                w += height * (tex.size_vec2().x / tex.size_vec2().y);
+            }
+            w
+        };
+
+        let x_offset = (total_width - content_width) / 2.0;
+        let painter = ui.painter();
+        let rect = ui.max_rect();
+
+        for (i, texture) in textures.iter().enumerate() {
+            let aspect = texture.size_vec2().x / texture.size_vec2().y;
+            let page_width = height * aspect;
             
-            let is_single_page = textures.len() == 1;
-            
-            let content_width = if is_single_page {
-                (height * (textures[0].size_vec2().x / textures[0].size_vec2().y)) * 2.0
+            let start_x = if is_single_page && is_right_aligned {
+                x_offset + page_width + x_shift
             } else {
-                let mut w = 0.0;
-                for tex in textures {
-                    w += height * (tex.size_vec2().x / tex.size_vec2().y);
-                }
-                w
+                x_offset + (i as f32 * page_width) + x_shift
             };
+            
+            let is_right_page = i == 1 || (is_single_page && is_right_aligned);
+            let should_curl = (is_old && self.direction > 0.0 && is_right_page) || 
+                              (is_old && self.direction < 0.0 && i == 0);
 
-            let x_offset = (total_width - content_width) / 2.0;
-            let painter = ui.painter();
-            let rect = ui.max_rect();
-
-            for (i, texture) in textures.iter().enumerate() {
-                let aspect = texture.size_vec2().x / texture.size_vec2().y;
-                let page_width = height * aspect;
-                
-                // 2. Position the page
-                // Shift to the right slot ONLY if it's a cover/right-aligned
-                let start_x = if is_single_page && is_right_aligned {
-                    x_offset + page_width + x_shift
+            if should_curl && is_foreground {
+                let back_texture = if self.direction > 0.0 {
+                    if !other_textures.is_empty() { &other_textures[0] } else { texture }
                 } else {
-                    x_offset + (i as f32 * page_width) + x_shift
+                    if other_textures.len() > 1 { 
+                        &other_textures[1] 
+                    } else if !other_textures.is_empty() { 
+                        &other_textures[0] 
+                    } else { 
+                        texture 
+                    }
+                };
+
+                let anchor_x = if i == 0 && !(is_single_page && is_right_aligned) {
+                    start_x + page_width
+                } else {
+                    start_x
                 };
                 
-                // 3. Determine if this specific page should curl
-                let is_right_page = i == 1 || (is_single_page && is_right_aligned);
-                let should_curl = (is_old && self.direction > 0.0 && is_right_page) || 
-                                (is_old && self.direction < 0.0 && i == 0);
-
-                if should_curl && is_foreground {
-                    // ... (Keep your existing back_texture logic here) ...
-                    let back_texture = if self.direction > 0.0 {
-                        if !other_textures.is_empty() { &other_textures[0] } else { texture }
-                    } else {
-                        if other_textures.len() > 1 { 
-                            &other_textures[1] 
-                        } else if !other_textures.is_empty() { 
-                            &other_textures[0] 
-                        } else { 
-                            texture 
-                        }
-                    };
-
-                    // 4. Set the Anchor (The Hinge)
-                    // Left pages hinge on their right edge (start_x + width). 
-                    // Right pages hinge on their left edge (start_x).
-                    let anchor_x = if i == 0 && !(is_single_page && is_right_aligned) {
-                        start_x + page_width
-                    } else {
-                        start_x
-                    };
-                    
-                    self.draw_curled_page(painter, texture, back_texture, anchor_x, height, page_width, progress, rect);
-                } else if !is_foreground {
-                // ... (Keep your existing background draw logic here) ...
+                self.draw_curled_page(painter, texture, back_texture, anchor_x, height, page_width, progress, rect);
+            } else if !is_foreground {
                 let page_rect = egui::Rect::from_min_size(
-                        egui::pos2(start_x, rect.min.y), 
-                        egui::vec2(page_width, height)
-                    );
-                    painter.image(texture.id(), page_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-                }
+                    egui::pos2(start_x, rect.min.y), 
+                    egui::vec2(page_width, height)
+                );
+                painter.image(texture.id(), page_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             }
         }
+    }
 
     // NEW FUNCTION GOES HERE
     fn draw_curled_page(
@@ -244,21 +274,18 @@ impl PdfApp {
 
 impl eframe::App for PdfApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let re_render_requested = false;
-        let new_direction = 0.0;
-
         let mut trigger_animation = false;
         let mut new_dir = 0.0; // This fixes the E0425 erro
         // 1. INPUT HANDLING
         if !self.is_animating {
             ctx.input_mut(|i| {
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) {
-                    if self.current_page + 1 < self.max_pages {
+                    if self.current_spread + 1 < self.spreads.len() {
                         new_dir = 1.0;
                         trigger_animation = true;
                     }
                 } else if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) {
-                    if self.current_page > 0 {
+                    if self.current_spread > 0 {
                         new_dir = -1.0;
                         trigger_animation = true;
                     }
@@ -270,45 +297,14 @@ impl eframe::App for PdfApp {
             self.old_textures = self.textures.clone();
             self.direction = new_dir;
             
-            // PAGINATION: Centered Cover (0) -> Spread (1,2) -> Spread (3,4)
+            // Pagination is now just +/- 1 spread!
             if new_dir > 0.0 {
-                // Forward: 0 to 1, then increment by 2
-                if self.current_page == 0 {
-                    self.current_page = 1;
-                } else {
-                    self.current_page = (self.current_page + 2).min(self.max_pages.saturating_sub(1));
-                }
+                self.current_spread += 1;
             } else {
-                // Backward: decrement by 2, but 1 goes to 0
-                if self.current_page == 1 {
-                    self.current_page = 0;
-                } else {
-                    self.current_page = self.current_page.saturating_sub(2);
-                }
+                self.current_spread -= 1;
             }
 
             self.render_current_spread(ctx); 
-            self.transition_start_time = ctx.input(|i| i.time);
-            self.is_animating = true;
-        }
-
-        // 2. ANIMATION TRIGGER
-        if re_render_requested {
-            // 1. Capture the current screen as 'old'
-            self.old_textures = self.textures.clone();
-            
-            // 2. Update page index
-            if new_direction > 0.0 {
-                self.current_page = (self.current_page + 2).min(self.max_pages.saturating_sub(1));
-            } else {
-                self.current_page = self.current_page.saturating_sub(2);
-            }
-
-            // 3. RENDER NEW TEXTURES IMMEDIATELY
-            // This ensures self.textures is NOT empty when the animation starts or ends
-            self.render_current_spread(ctx); 
-
-            self.direction = new_direction;
             self.transition_start_time = ctx.input(|i| i.time);
             self.is_animating = true;
         }
@@ -317,32 +313,69 @@ impl eframe::App for PdfApp {
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Open PDF").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("PDF", &["pdf"])
-                        .pick_file() 
-                    {
-                        // 1. Update the path and reset page count
+                    if let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).pick_file() {
                         self.current_path = Some(path.clone());
-                        self.current_page = 0;
-
-                        // 2. Load the document to get the total page count
-                        if let Ok(doc) = self.pdfium.load_pdf_from_file(&path, None) {
-                            self.max_pages = doc.pages().len() as usize;
-                        }
-
-                        // 3. Clear existing textures and animation state
+                        self.current_spread = 0;
+                        self.spreads.clear();
                         self.textures.clear();
                         self.old_textures.clear();
                         self.is_animating = false;
 
-                        // 4. Trigger the initial render for the first page
-                        self.render_current_spread(ctx);
+                        if let Ok(doc) = self.pdfium.load_pdf_from_file(&path, None) {
+                            self.total_pages = doc.pages().len() as usize;
+                            
+                            let mut i = 0;
+                            while i < self.total_pages {
+                                // Page 0 is always the front cover (solo)
+                                if i == 0 {
+                                    self.spreads.push(vec![0]);
+                                    i += 1;
+                                    continue;
+                                }
+
+                                // Check if current page is standard portrait
+                                if let Ok(page_a) = doc.pages().get(i as u16) {
+                                    let w1 = page_a.width().value;
+                                    let h1 = page_a.height().value;
+                                    let is_a_standard = (w1 / h1) < 0.85; // A4 is ~0.707
+
+                                    // If standard, check if the NEXT page is ALSO standard
+                                    if is_a_standard && i + 1 < self.total_pages {
+                                        if let Ok(page_b) = doc.pages().get((i + 1) as u16) {
+                                            let w2 = page_b.width().value;
+                                            let h2 = page_b.height().value;
+                                            let is_b_standard = (w2 / h2) < 0.85;
+
+                                            if is_b_standard {
+                                                // Both are standard A4s, group them!
+                                                self.spreads.push(vec![i, i + 1]);
+                                                i += 2;
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                // Fallback: If it's wide, landscape, or the partner page is weird, keep it solo
+                                self.spreads.push(vec![i]);
+                                i += 1;
+                            }
+                        }
                         
-                        println!("Loaded: {}", path.display());
+                        self.render_current_spread(ctx);
                     }
                 }
                 ui.separator();
-                ui.label(format!("Page {} of {}", self.current_page + 1, self.max_pages));
+                if !self.spreads.is_empty() {
+                    let current_pages_str = self.spreads[self.current_spread]
+                        .iter()
+                        .map(|p| (p + 1).to_string())
+                        .collect::<Vec<_>>()
+                        .join("-");
+                    ui.label(format!("Page(s) {} of {}", current_pages_str, self.total_pages));
+                } else {
+                    ui.label("Page 0 of 0");
+                }
             });
         });
 
@@ -416,18 +449,18 @@ impl eframe::App for PdfApp {
                             self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true, false);
                         }
                     }
-                } else {
-                    // --- STATIC STATE ---
-                    self.is_animating = false;
-                    if !self.old_textures.is_empty() {
-                        self.old_textures.clear();
+                    } else {
+                        // --- STATIC STATE ---
+                        self.is_animating = false;
+                        if !self.old_textures.is_empty() {
+                            self.old_textures.clear();
+                        }
+                        
+                        // FIX: Changed from current_page to current_spread
+                        let is_cover = self.current_spread == 0;
+                        self.render_spread(ui, &self.textures, &self.textures, available_height, available_width, 0.0, 0.0, false, false, is_cover);
                     }
-                    
-                    // The only time a single page is right-aligned in static mode is if it's the front cover.
-                    let is_cover = self.current_page == 0;
-                    self.render_spread(ui, &self.textures, &self.textures, available_height, available_width, 0.0, 0.0, false, false, is_cover);
-                }
             }
         });
     } // Closing update
-}
+} // Closing impl eframe::App
