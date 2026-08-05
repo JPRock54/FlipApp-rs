@@ -9,7 +9,7 @@ A lightweight, high-performance Rust-based PDF reader built with `eframe` and po
 
 Before building FlipApp, ensure you have the following installed:
 * **Rust Toolchain** (Stable): [Install via rustup](https://rustup.rs/)
-* **PDFium Binary**: FlipApp requires the PDFium library to render documents. 
+* **PDFium Binary**: FlipApp requires the [PDFium library](https://github.com/bblanchon/pdfium-binaries/releases) to render documents. 
   * **Linux**: `libpdfium.so` (included or placed in the project root).
   * **Windows**: `pdfium.dll` (required alongside the executable).
 
