@@ -27,7 +27,7 @@ Before building FlipApp, ensure you have the following installed:
 ### Method 1: Native Cargo Build
 1. Clone the repository and navigate into the project directory:
    ```bash
-   git clone [https://github.com/JPRock54/FlipApp-rs.git](https://github.com/JPRock54/FlipApp-rs.git)
+   git clone https://github.com/JPRock54/FlipApp-rs.git
    cd FlipApp-rs
 
 2. Ensure libpdfium.so is present in the project root.
@@ -56,7 +56,7 @@ Before building FlipApp, ensure you have the following installed:
 ## Building on Windows
 1. Open PowerShell or Command Prompt and clone/navigate to the repository:
    ```bash
-   git clone [https://github.com/JPRock54/FlipApp-rs.git](https://github.com/JPRock54/FlipApp-rs.git)
+   git clone https://github.com/JPRock54/FlipApp-rs.git
    cd FlipApp-rs
 
 2. Build the release version using Cargo:
