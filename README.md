@@ -1,4 +1,3 @@
-WIP
 # FlipApp
 
 A lightweight, high-performance Rust-based PDF reader built with `eframe` and powered by PDFium.
@@ -12,6 +11,14 @@ Before building FlipApp, ensure you have the following installed:
 * **PDFium Binary**: FlipApp requires the [PDFium library](https://github.com/bblanchon/pdfium-binaries/releases) to render documents. 
   * **Linux**: `libpdfium.so` (included or placed in the project root).
   * **Windows**: `pdfium.dll` (required alongside the executable).
+
+---
+
+## Usuage
+* Open the application.
+* Click select pdf.
+* Select a .pdf file from the wizzard.
+* Use the arrow keys to flip between pages.
 
 ---
 
@@ -55,5 +62,5 @@ Before building FlipApp, ensure you have the following installed:
 2. Build the release version using Cargo:
    ```bash
    cargo build --release
-   
+
 3. Copy pdfium.dll into the output folder (target/release/) right next to FlipApp.exe before running it.
