@@ -376,13 +376,16 @@ impl eframe::App for PdfApp {
                         // --- RIGHT FLIP (Forward) ---
                         if self.old_textures.len() == 1 {
                             // CASE: Opening the Cover (Page 0 -> Pages 1-2)
-                            // 1. Bottom Layer: The new spread is the entire background
-                            self.render_spread(ui, &self.textures, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
-                            // 2. Top Layer: The cover (old_textures[0]) curls to the left
+                            // Fix: Only draw the NEW RIGHT page in the background. 
+                            // The new left page is attached to the back of the cover!
+                            if self.textures.len() > 1 {
+                                let background_spread = [self.textures[1].clone()];
+                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                            }
+                            // Top Layer: The cover (old_textures[0]) curls to the left
                             self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
                         } else {
                             // CASE: Standard Spread Flip (e.g., 1-2 -> 3-4)
-                            // 1. Composite Background: Left Page (Old) | Right Page (New)
                             if self.old_textures.len() > 0 && self.textures.len() > 1 {
                                 let background_spread = [
                                     self.old_textures[0].clone(), 
@@ -390,20 +393,22 @@ impl eframe::App for PdfApp {
                                 ];
                                 self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
                             }
-                            // 2. Top Layer: Right page of old spread curls away
+                            // Top Layer: Right page of old spread curls away
                             self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
                         }
                     } else {
                         // --- LEFT FLIP (Backward) ---
                         if self.textures.len() == 1 {
                             // CASE: Closing to Cover (Pages 1-2 -> Page 0)
-                            // 1. Bottom Layer: The cover is the static background
-                            self.render_spread(ui, &self.textures, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
-                            // 2. Top Layer: Left page of the spread (old_textures[0]) curls to the right
+                            // Fix: Only draw the OLD RIGHT page in the background until the cover lands.
+                            if self.old_textures.len() > 1 {
+                                let background_spread = [self.old_textures[1].clone()];
+                                self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, false, false);
+                            }
+                            // Top Layer: Left page of the spread (old_textures[0]) curls to the right
                             self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
                         } else {
                             // CASE: Standard Spread Flip (e.g., 3-4 -> 1-2)
-                            // 1. Composite Background: Left Page (New) | Right Page (Old)
                             if self.textures.len() > 0 && self.old_textures.len() > 1 {
                                 let background_spread = [
                                     self.textures[0].clone(), 
@@ -411,7 +416,7 @@ impl eframe::App for PdfApp {
                                 ];
                                 self.render_spread(ui, &background_spread, &self.old_textures, available_height, available_width, 0.0, 0.0, true, false);
                             }
-                            // 2. Top Layer: Left page of old spread curls away
+                            // Top Layer: Left page of old spread curls away
                             self.render_spread(ui, &self.old_textures, &self.textures, available_height, available_width, 0.0, ease_progress, true, true);
                         }
                     }
